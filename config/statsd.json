@@ -1,0 +1,19 @@
+
+{
+  "LogTraces" : true,
+  "Interactive" : false,
+  "module" :
+  {
+    "Username" : "guest",
+    "Password" : "guest",
+    "Realm"    : "RabbitMQ Management",
+    "Host"     : "localhost",
+    "Port"     : "15672",
+    "ignore" : [
+      ["queue", "Regex", "^amq"],
+      ["exchange", "Regex", "my-exchange"]
+    ]
+
+  }
+
+}

@@ -18,11 +18,65 @@
 python plugin for collectd to obtain rabbitmq stats
 """
 
-import collectd
 import json
 import ssl
-import urllib
-import urllib2
+import urllib.request, urllib.parse, urllib.error
+import urllib.request, urllib.error, urllib.parse
+import logging
+
+
+
+def determine_json_encoding(json_bytes):
+    '''
+    Given the fact that the first 2 characters in json are guaranteed to be ASCII, we can use
+    these to determine the encoding.
+    See: http://tools.ietf.org/html/rfc4627#section-3
+
+    Copied here:
+       Since the first two characters of a JSON text will always be ASCII
+       characters [RFC0020], it is possible to determine whether an octet
+       stream is UTF-8, UTF-16 (BE or LE), or UTF-32 (BE or LE) by looking
+       at the pattern of nulls in the first four octets.
+
+               00 00 00 xx  UTF-32BE
+               00 xx 00 xx  UTF-16BE
+               xx 00 00 00  UTF-32LE
+               xx 00 xx 00  UTF-16LE
+               xx xx xx xx  UTF-8
+    '''
+
+    assert(isinstance(json_bytes, bytes))
+
+    if len(json_bytes) > 4:
+        b1, b2, b3, b4 = json_bytes[0], json_bytes[1], json_bytes[2], json_bytes[3]
+        if   b1 == 0 and b2 == 0 and b3 == 0 and b4 != 0:
+            return "UTF-32BE"
+        elif b1 == 0 and b2 != 0 and b3 == 0 and b4 != 0:
+            return "UTF-16BE"
+        elif b1 != 0 and b2 == 0 and b3 == 0 and b4 == 0:
+            return "UTF-32LE"
+        elif b1 != 0 and b2 == 0 and b3 != 0 and b4 == 0:
+            return "UTF-16LE"
+        elif b1 != 0 and b2 != 0 and b3 != 0 and b4 != 0:
+            return "UTF-8"
+        else:
+            raise Exceptions.ContentTypeError("Unknown encoding!")
+
+    elif len(json_bytes) > 2:
+        b1, b2 = json_bytes[0], json_bytes[1]
+        if   b1 == 0 and b2 == 0:
+            return "UTF-32BE"
+        elif b1 == 0 and b2 != 0:
+            return "UTF-16BE"
+        elif b1 != 0 and b2 == 0:
+            raise Exceptions.ContentTypeError("Json string too short to definitively infer encoding.")
+        elif b1 != 0 and b2 != 0:
+            return "UTF-8"
+        else:
+            raise Exceptions.ContentTypeError("Unknown encoding!")
+
+    raise Exceptions.ContentTypeError("Input string too short to guess encoding!")
+
 
 
 class RabbitMQStats(object):
@@ -32,18 +86,18 @@ class RabbitMQStats(object):
     def __init__(self, config):
         self.config = config
         self.api = "{0}/api".format(self.config.connection.url)
+        self.log = logging.getLogger("Main.StatsModule.RabbitMQInterface")
 
-    @staticmethod
-    def get_names(items):
+    def get_names(self, items):
         """
         Return URL encoded names.
         """
-        collectd.debug("Getting names for %s" % items)
+        self.log.debug("Getting names for %s", items)
         names = list()
         for item in items:
             name = item.get('name', None)
             if name:
-                name = urllib.quote(name, '')
+                name = urllib.parse.quote(name, '')
                 names.append(name)
         return names
 
@@ -58,12 +112,12 @@ class RabbitMQStats(object):
             ctx.options |= ssl.OP_NO_SSLv3
             ctx.verify_mode = ssl.CERT_NONE
             ctx.check_hostname = False
-            handlers.append(urllib2.HTTPSHandler(context=ctx))
+            handlers.append(urllib.request.HTTPSHandler(context=ctx))
 
         url = "{0}/{1}".format(self.api, '/'.join(args))
-        collectd.debug("Getting info for %s" % url)
+        self.log.debug("Getting info for %s", url)
 
-        auth_handler = urllib2.HTTPBasicAuthHandler()
+        auth_handler = urllib.request.HTTPBasicAuthHandler()
         auth_handler.add_password(realm=self.config.auth.realm,
                                   uri=self.api,
                                   user=self.config.auth.username,
@@ -71,28 +125,32 @@ class RabbitMQStats(object):
 
         handlers.append(auth_handler)
 
-        opener = urllib2.build_opener(*handlers)
-        urllib2.install_opener(opener)
+        opener = urllib.request.build_opener(*handlers)
+        urllib.request.install_opener(opener)
 
         try:
-            info = urllib2.urlopen(url)
-        except urllib2.HTTPError as http_error:
-            collectd.error("HTTP Error: %s" % http_error)
+            info = urllib.request.urlopen(url)
+        except urllib.error.HTTPError as http_error:
+            self.log.error("HTTP Error: %s", http_error)
             return None
-        except urllib2.URLError as url_error:
-            collectd.error("URL Error: %s" % url_error)
+        except urllib.error.URLError as url_error:
+            self.log.error("URL Error: %s", url_error)
             return None
         except ValueError as value_error:
-            collectd.error("Value Error: %s" % value_error)
+            self.log.error("Value Error: %s", value_error)
             return None
 
+        info_raw = info.read()
+        # info_encoding = determine_json_encoding(info_raw)
+        info_decoded = info_raw.decode("utf-8")
+
         try:
-            return_value = json.load(info)
+            return_value = json.loads(info_decoded)
         except ValueError as err:
-            collectd.error("ValueError parsing JSON from %s: %s" % (url, err))
+            self.log.error("ValueError parsing JSON from %s: %s", url, err)
             return_value = None
         except TypeError as err:
-            collectd.error("TypeError parsing JSON from %s: %s" % (url, err))
+            self.log.error("TypeError parsing JSON from %s: %s", url, err)
             return_value = None
         return return_value
 
@@ -108,14 +166,14 @@ class RabbitMQStats(object):
         """
         Returns a list of vhosts.
         """
-        collectd.debug("Getting a list of vhosts")
+        self.log.debug("Getting a list of vhosts")
         return self.get_info("vhosts") or list()
 
     def get_vhost_names(self):
         """
         Returns a list of vhost names.
         """
-        collectd.debug("Getting vhost names")
+        self.log.debug("Getting vhost names")
         all_vhosts = self.get_vhosts()
         return self.get_names(all_vhosts) or list()
     vhost_names = property(get_vhost_names)
@@ -125,14 +183,14 @@ class RabbitMQStats(object):
         """
         Returns raw exchange data.
         """
-        collectd.debug("Getting exchanges for %s" % vhost_name)
+        self.log.debug("Getting exchanges for %s", vhost_name)
         return self.get_info("exchanges", vhost_name)
 
     def get_exchange_names(self, vhost_name=None):
         """
         Returns a list of all exchange names.
         """
-        collectd.debug("Getting exchange names for %s" % vhost_name)
+        self.log.debug("Getting exchange names for %s", vhost_name)
         all_exchanges = self.get_exchanges(vhost_name)
         return self.get_names(all_exchanges)
 
@@ -140,8 +198,8 @@ class RabbitMQStats(object):
         """
         Returns a dictionary of stats for exchange_name.
         """
-        collectd.debug("Getting exchange stats for %s in %s" %
-                       (exchange_name, vhost_name))
+        self.log.debug("Getting exchange stats for %s in %s",
+                       exchange_name, vhost_name)
 
         return self.get_stats('exchange', exchange_name, vhost_name)
 
@@ -150,14 +208,14 @@ class RabbitMQStats(object):
         """
         Returns raw queue data.
         """
-        collectd.debug("Getting queues for %s" % vhost_name)
+        self.log.debug("Getting queues for %s", vhost_name)
         return self.get_info("queues", vhost_name)
 
     def get_queue_names(self, vhost_name=None):
         """
         Returns a list of all queue names.
         """
-        collectd.debug("Getting queue names for %s" % vhost_name)
+        self.log.debug("Getting queue names for %s", vhost_name)
         all_queues = self.get_queues(vhost_name)
         return self.get_names(all_queues)
 
@@ -177,11 +235,11 @@ class RabbitMQStats(object):
         """
         Returns a dictionary of stats.
         """
-        collectd.debug("Getting stats for %s %s%s in %s" %
-                       (stat_name or 'all',
-                        stat_type,
-                        's' if not stat_name else '',
-                        vhost_name))
+        self.log.debug("Getting stats for %s %s%s in %s",
+                       stat_name or 'all',
+                       stat_type,
+                       's' if not stat_name else '',
+                       vhost_name)
 
         if stat_type not in('exchange', 'queue'):
             raise ValueError("Unsupported stat type {0}".format(stat_type))

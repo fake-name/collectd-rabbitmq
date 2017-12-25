@@ -18,83 +18,18 @@
 This module controls the interactions with collectd
 """
 
-import collectd
 import re
-import urllib
+import urllib.parse
+import logging
 
-from collectd_rabbitmq import rabbit
-from collectd_rabbitmq import utils
+import statsd
+import traceback
 
-CONFIGS = []
-INSTANCES = []
-
-
-def configure(config_values):
-    """
-    Converts a collectd configuration into rabbitmq configuration.
-    """
-
-    collectd.debug('Configuring RabbitMQ Plugin')
-    data_to_ignore = dict()
-    scheme = 'http'
-    validate_certs = True
-    vhost_prefix = None
-
-    for config_value in config_values.children:
-        collectd.debug("%s = %s" % (config_value.key, config_value.values))
-        if len(config_value.values) > 0:
-            if config_value.key == 'Username':
-                username = config_value.values[0]
-            elif config_value.key == 'Password':
-                password = config_value.values[0]
-            elif config_value.key == 'Host':
-                host = config_value.values[0]
-            elif config_value.key == 'Port':
-                port = config_value.values[0]
-            elif config_value.key == 'Realm':
-                realm = config_value.values[0]
-            elif config_value.key == 'Scheme':
-                scheme = config_value.values[0]
-            elif config_value.key == 'VHostPrefix':
-                vhost_prefix = config_value.values[0]
-            elif config_value.key == 'ValidateCerts':
-                validate_certs = config_value.values[0]
-            elif config_value.key == 'Ignore':
-                type_rmq = config_value.values[0]
-                data_to_ignore[type_rmq] = list()
-                for regex in config_value.children:
-                    data_to_ignore[type_rmq].append(regex.values[0])
-
-    global CONFIGS  # pylint: disable=W0603
-
-    auth = utils.Auth(username, password, realm)
-    conn = utils.ConnectionInfo(host, port, scheme,
-                                validate_certs=validate_certs)
-    config = utils.Config(auth, conn, data_to_ignore, vhost_prefix)
-    CONFIGS.append(config)
+from statsd_rabbitmq import rabbit
+from statsd_rabbitmq import utils
 
 
-def init():
-    """
-    Creates the logs stash plugin object.
-    """
-    for config in CONFIGS:
-        INSTANCES.append(CollectdPlugin(config))
-
-
-def read():
-    """
-    Reads and dispatches data.
-    """
-    collectd.debug("Reading data from rabbit and dispatching")
-    if not INSTANCES:
-        collectd.warning('Plugin not ready')
-        return
-    for instance in INSTANCES:
-        instance.read()
-
-
-class CollectdPlugin(object):
+class StatsdPlugin(object):
     """
     Controls interaction between rabbitmq stats and collectd.
     """
@@ -120,6 +55,13 @@ class CollectdPlugin(object):
     def __init__(self, config):
         self.config = config
         self.rabbit = rabbit.RabbitMQStats(self.config)
+        self.log = logging.getLogger("Main.StatsModule.Class")
+
+        self.mon_con = statsd.StatsClient(
+                host = config.statsd_conf.host,
+                port = config.statsd_conf.port,
+                prefix = config.statsd_conf.prefix
+                )
 
     def read(self):
         """
@@ -136,14 +78,12 @@ class CollectdPlugin(object):
         Generate a "normalized" vhost name without / (or escaped /).
         """
         if name:
-            name = urllib.unquote(name)
+            name = urllib.parse.unquote(name)
 
         if not name or name == '/':
             name = 'default'
-        else:
-            name = re.sub(r'^/', 'slash_', name)
-            name = re.sub(r'/$', '_slash', name)
-            name = re.sub(r'/', '_slash_', name)
+        # else:
+        #     name = re.sub(r'/', '-', name)
 
         vhost_prefix = ''
         if self.config.vhost_prefix:
@@ -155,7 +95,7 @@ class CollectdPlugin(object):
         Sends message stats to collectd.
         """
         if not data:
-            collectd.debug("No data for %s in vhost %s" % (plugin, vhost))
+            self.log.debug("No data for %s in vhost %s", plugin, vhost)
             return
 
         vhost = self.generate_vhost_name(vhost)
@@ -163,8 +103,8 @@ class CollectdPlugin(object):
         for name in self.message_stats:
             if 'message_stats' not in data:
                 return
-            collectd.debug("Dispatching stat %s for %s in %s" %
-                           (name, plugin_instance, vhost))
+            self.log.debug("Dispatching stat %s for %s in %s",
+                           name, plugin_instance, vhost)
 
             value = data['message_stats'].get(name, 0)
             self.dispatch_values(value, vhost, plugin, plugin_instance, name)
@@ -184,14 +124,14 @@ class CollectdPlugin(object):
         name = self.generate_vhost_name('')
         node_names = []
         stats = self.rabbit.get_nodes()
-        collectd.debug("Node stats for {} {}".format(name, stats))
+        self.log.debug("Node stats for %s %s", name, stats)
         for node in stats:
             node_name = node['name'].split('@')[1]
             if node_name in node_names:
                 # If we ahve already seen this node_name we
                 node_name = '%s%s' % (node_name, len(node_names))
             node_names.append(node_name)
-            collectd.debug("Getting stats for %s node" % node_names)
+            self.log.debug("Getting stats for %s node", node_names)
             for stat_name in self.node_stats:
                 value = node.get(stat_name, 0)
                 self.dispatch_values(value, name, node_name, None, stat_name)
@@ -200,6 +140,7 @@ class CollectdPlugin(object):
                 if not details:
                     continue
                 for detail in self.message_details:
+
                     value = details.get(detail, 0)
                     self.dispatch_values(value, name, node_name, None,
                                          "%s_details" % stat_name, detail)
@@ -226,39 +167,45 @@ class CollectdPlugin(object):
                 if re.match(stats_re, stat_name) is not None:
                     type_name = "rabbitmq_%s" % stat_name
 
+
                 value = subtree.get(stat_name, 0)
+                print("Getting stat %s: %s" % (stat_name, value))
                 self.dispatch_values(value, prefixed_cluster_name, "overview",
                                      subtree_name, type_name)
 
                 details = subtree.get("%s_details" % stat_name, None)
                 if not details:
                     continue
-                detail_values = []
+
                 for detail in self.message_details:
-                    detail_values.append(details.get(detail, 0))
+                    if detail in details:
+                        detail_stat = stat_name + "." + detail
+                        stat_value = details.get(detail, 0)
 
-                collectd.debug("Dispatching overview stat {} for {}".format(
-                    stat_name, prefixed_cluster_name))
+                        self.log.debug("Dispatching overview stat %s for %s", detail_stat, prefixed_cluster_name)
 
-                self.dispatch_values(detail_values, prefixed_cluster_name,
-                                     'overview', subtree_name,
-                                     "rabbitmq_details", stat_name)
+                        self.dispatch_values(value           = stat_value,
+                                             host            = prefixed_cluster_name,
+                                             plugin          = 'overview',
+                                             plugin_instance = subtree_name,
+                                             metric_type     = "rabbitmq_details",
+                                             type_instance   = detail_stat)
 
     def dispatch_queue_stats(self, data, vhost, plugin, plugin_instance):
         """
         Sends queue stats to collectd.
         """
         if not data:
-            collectd.debug("No data for %s in vhost %s" % (plugin, vhost))
+            self.log.debug("No data for %s in vhost %s", plugin, vhost)
             return
 
         vhost = self.generate_vhost_name(vhost)
         for name in self.queue_stats:
             if name not in data:
-                collectd.debug("Stat ({}) not found in data.".format(name))
+                self.log.debug("Stat (%s) not found in data.", name)
                 continue
-            collectd.debug("Dispatching stat %s for %s in %s" %
-                           (name, plugin_instance, vhost))
+            self.log.debug("Dispatching stat %s for %s in %s",
+                           name, plugin_instance, vhost)
 
             value = data.get(name, 0)
             self.dispatch_values(value, vhost, plugin, plugin_instance, name)
@@ -267,9 +214,9 @@ class CollectdPlugin(object):
         """
         Dispatches exchange data for vhost_name.
         """
-        collectd.debug("Dispatching exchange data for {0}".format(vhost_name))
+        self.log.debug("Dispatching exchange data for %s", vhost_name)
         stats = self.rabbit.get_exchange_stats(vhost_name=vhost_name)
-        for exchange_name, value in stats.iteritems():
+        for exchange_name, value in stats.items():
             self.dispatch_message_stats(value, vhost_name, 'exchanges',
                                         exchange_name)
 
@@ -277,23 +224,21 @@ class CollectdPlugin(object):
         """
         Dispatches queue data for vhost_name.
         """
-        collectd.debug("Dispatching queue data for {0}".format(vhost_name))
+        self.log.debug("Dispatching queue data for %s", vhost_name)
         stats = self.rabbit.get_queue_stats(vhost_name=vhost_name)
-        for queue_name, value in stats.iteritems():
+        for queue_name, value in stats.items():
             self.dispatch_message_stats(value, vhost_name, 'queues',
                                         queue_name)
             self.dispatch_queue_stats(value, vhost_name, 'queues',
                                       queue_name)
 
-    # pylint: disable=R0913
-    @staticmethod
-    def dispatch_values(values, host, plugin, plugin_instance,
+    def dispatch_values(self, value, host, plugin, plugin_instance,
                         metric_type, type_instance=None):
         """
         Dispatch metrics to collectd.
 
-        :param values (tuple or list): The values to dispatch. It will be
-                                       coerced into a list.
+        :param value (tuple or list): The value to dispatch. It will be
+                                       coerced into a float.
         :param host: (str): The name of the vhost.
         :param plugin (str): The name of the plugin. Should be
                              queue/exchange.
@@ -302,42 +247,54 @@ class CollectdPlugin(object):
         :param type_instance: Optional.
 
         """
+        host = host.replace(".", "_")
         path = "{0}.{1}.{2}.{3}.{4}".format(host, plugin,
                                             plugin_instance,
                                             metric_type, type_instance)
 
-        collectd.debug("Dispatching %s values: %s" % (path, values))
+        if path.endswith(".None"):
+            path = path[:-5]
+
+        self.log.debug("Dispatching %s value: %s", path, value)
+        self.log.debug("Params: '%s'", (host, plugin, plugin_instance, metric_type, type_instance))
+
+        # traceback.print_stack()
 
         try:
-            metric = collectd.Values()
-            metric.host = host
+            assert isinstance(value, (int, float))
+            value = float(value)
 
-            metric.plugin = plugin
 
-            if plugin_instance:
-                metric.plugin_instance = plugin_instance
+            # metric = collectd.Values()
+            # metric.host = host
 
-            metric.type = metric_type
+            # metric.plugin = plugin
 
-            if type_instance:
-                metric.type_instance = type_instance
+            # if plugin_instance:
+            #     metric.plugin_instance = plugin_instance
 
-            if utils.is_sequence(values):
-                metric.values = values
-            else:
-                metric.values = [values]
-            # Tiny hack to fix bug with write_http plugin in Collectd
-            # versions < 5.5.
-            # See https://github.com/phobos182/collectd-elasticsearch/issues/15
-            # for details
-            metric.meta = {'0': True}
-            metric.dispatch()
+            # metric.type = metric_type
+
+            # if type_instance:
+            #     metric.type_instance = type_instance
+
+            # if utils.is_sequence(values):
+            #     metric.values = values
+            # else:
+            #     metric.values = [values]
+            # # Tiny hack to fix bug with write_http plugin in Statsd
+            # # versions < 5.5.
+            # # See https://github.com/phobos182/collectd-elasticsearch/issues/15
+            # # for details
+            # metric.meta = {'0': True}
+            # metric.dispatch()
         except Exception as ex:
-            collectd.warning("Failed to dispatch %s. Exception %s" %
+            traceback.print_exc()
+            self.log.warning("Failed to dispatch %s. Exception %s" %
                              (path, ex))
 
 
-# Register callbacks
-collectd.register_config(configure)
-collectd.register_init(init)
-collectd.register_read(read)
+# # Register callbacks
+# collectd.register_config(configure)
+# collectd.register_init(init)
+# collectd.register_read(read)

@@ -38,23 +38,23 @@ test_requirements = [
 
 
 setup(
-    name='collectd-rabbitmq',
-    version='1.18.0',
-    description="A collected plugin, written in python, to"
+    name='statsd-rabbitmq',
+    version='0.0.1',
+    description="A statsd plugin, written in python, to"
                 "collect statistics from RabbitMQ.",
     long_description=readme + '\n\n' + history,
     author="Mike Buzzetti",
     author_email='mike.buzzetti@gmail.com',
-    url='https://github.com/NYTimes/collectd-rabbitmq',
+    url='https://github.com/NYTimes/statsd-rabbitmq',
     packages=[
-        'collectd_rabbitmq',
+        'statsd_rabbitmq',
     ],
-    package_dir={'collectd_rabbitmq': 'collectd_rabbitmq'},
+    package_dir={'statsd_rabbitmq': 'statsd_rabbitmq'},
     include_package_data=True,
     install_requires=requirements,
     license="Apache",
     zip_safe=False,
-    keywords='collectd-rabbitmq',
+    keywords='statsd-rabbitmq',
     classifiers=[
         'Development Status :: 2 - Pre-Alpha',
         'Intended Audience :: Developers',
@@ -65,5 +65,5 @@ setup(
     ],
     test_suite='tests',
     tests_require=test_requirements,
-    data_files=[('share/collectd-rabbitmq/', ['config/types.db.custom'])],
+    data_files=[('share/statsd-rabbitmq/', ['config/types.db.custom'])],
 )
