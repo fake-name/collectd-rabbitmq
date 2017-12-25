@@ -101,3 +101,4 @@ vagrant/roles
 vagrant/.vagrant
 # Pycharm/Intellij Idea
 .idea
+/statsd.json

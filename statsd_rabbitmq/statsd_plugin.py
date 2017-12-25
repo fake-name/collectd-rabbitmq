@@ -255,39 +255,17 @@ class StatsdPlugin(object):
         if path.endswith(".None"):
             path = path[:-5]
 
-        self.log.debug("Dispatching %s value: %s", path, value)
-        self.log.debug("Params: '%s'", (host, plugin, plugin_instance, metric_type, type_instance))
 
         # traceback.print_stack()
 
         try:
             assert isinstance(value, (int, float))
+            self.log.debug("Dispatching %s value: %s", path, value)
+            self.log.debug("Params: '%s'", (host, plugin, plugin_instance, metric_type, type_instance))
             value = float(value)
 
+            self.mon_con.gauge(path, value)
 
-            # metric = collectd.Values()
-            # metric.host = host
-
-            # metric.plugin = plugin
-
-            # if plugin_instance:
-            #     metric.plugin_instance = plugin_instance
-
-            # metric.type = metric_type
-
-            # if type_instance:
-            #     metric.type_instance = type_instance
-
-            # if utils.is_sequence(values):
-            #     metric.values = values
-            # else:
-            #     metric.values = [values]
-            # # Tiny hack to fix bug with write_http plugin in Statsd
-            # # versions < 5.5.
-            # # See https://github.com/phobos182/collectd-elasticsearch/issues/15
-            # # for details
-            # metric.meta = {'0': True}
-            # metric.dispatch()
         except Exception as ex:
             traceback.print_exc()
             self.log.warning("Failed to dispatch %s. Exception %s" %
