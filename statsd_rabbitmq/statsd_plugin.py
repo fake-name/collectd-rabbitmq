@@ -247,10 +247,11 @@ class StatsdPlugin(object):
         :param type_instance: Optional.
 
         """
-        host = host.replace(".", "_")
-        path = "{0}.{1}.{2}.{3}.{4}".format(host, plugin,
-                                            plugin_instance,
-                                            metric_type, type_instance)
+        path = "{0}.{1}.{2}.{3}.{4}".format(str(host).replace(".", "-"),
+                                            str(plugin).replace(".", "-"),
+                                            str(plugin_instance).replace(".", "-"),
+                                            str(metric_type).replace(".", "-"),
+                                            str(type_instance).replace(".", "-"))
 
         if path.endswith(".None"):
             path = path[:-5]

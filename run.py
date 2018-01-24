@@ -1,14 +1,18 @@
 
 import logging
 import time
+import traceback
 import statsd_rabbitmq
 
 
 def go():
-	conf = statsd_rabbitmq.load_config("./statsd.json")
+	conf = statsd_rabbitmq.load_config("/etc/statsd-rabbitmq/statsd-rabbitmq-conf.json")
 	instance = statsd_rabbitmq.StatsdPlugin(conf)
 	while 1:
-		instance.read()
+		try:
+			instance.read()
+		except Exception:
+			traceback.print_exc()
 		time.sleep(10)
 
 
