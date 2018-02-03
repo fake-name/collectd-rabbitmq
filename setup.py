@@ -39,7 +39,7 @@ test_requirements = [
 
 setup(
     name='statsd-rabbitmq',
-    version='0.0.1',
+    version='0.0.2',
     description="A statsd plugin, written in python, to"
                 "collect statistics from RabbitMQ.",
     long_description=readme + '\n\n' + history,
