@@ -252,6 +252,7 @@ class StatsdPlugin(object):
                                             str(plugin_instance).replace(".", "-"),
                                             str(metric_type).replace(".", "-"),
                                             str(type_instance).replace(".", "-"))
+        path = path.replace("/", "-")
 
         if path.endswith(".None"):
             path = path[:-5]
