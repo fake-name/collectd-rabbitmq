@@ -247,16 +247,15 @@ class StatsdPlugin(object):
         :param type_instance: Optional.
 
         """
-        path = "{0}.{1}.{2}.{3}.{4}".format(str(host).replace(".", "-"),
-                                            str(plugin).replace(".", "-"),
+        path = "{0}.{1}.{2}.{3}.{4}".format(str(host           ).replace(".", "-"),
+                                            str(plugin         ).replace(".", "-"),
                                             str(plugin_instance).replace(".", "-"),
-                                            str(metric_type).replace(".", "-"),
-                                            str(type_instance).replace(".", "-"))
-        path = path.replace("/", "-")
+                                            str(metric_type    ).replace(".", "-"),
+                                            str(type_instance  ).replace(".", "-"))
+        path = path.replace("/", "-").replace("_", "-")
 
         if path.endswith(".None"):
             path = path[:-5]
-
 
         # traceback.print_stack()
 
