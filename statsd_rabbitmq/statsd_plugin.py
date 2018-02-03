@@ -259,6 +259,9 @@ class StatsdPlugin(object):
             .replace("_",  "-")       \
             .strip("-").strip()
 
+        while "--" in path:
+            path = path.replace("--", "-")
+
         if path.endswith(".None"):
             path = path[:-5]
 
