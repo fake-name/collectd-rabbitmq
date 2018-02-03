@@ -253,7 +253,7 @@ class StatsdPlugin(object):
                                             str(metric_type    ).replace(".", "-"),
                                             str(type_instance  ).replace(".", "-"))
 
-        path = path.replace("/", "-") \
+        path = path.replace("/", "-vhost.") \
             .replace("_-", "-")       \
             .replace("-_", "-")       \
             .replace("_",  "-")       \
